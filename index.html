@@ -1,0 +1,17 @@
+﻿<!DOCTYPE html>
+<html lang="en-us">
+<head>
+    <meta name="author" content="Osman Zakir" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta charset="utf-8" />
+    <link href="styles/styles.css" rel="stylesheet" />
+    <script src="scripts/scripts.js" async defer></script>
+    <script async defer src="https://maps.googleapis.com/maps/api/js?v=3&key={{ apikey | urlencode }}&libraries=places&callback=init_map"></script>
+    <script async defer src="https://api.mqcdn.com/sdk/mapquest-js/v1.3.2/mapquest.js"></script>
+    <title>DragonOsman Currency Converter</title>
+</head>
+<body>
+    <input id="search-input" class="controls" type="text" placeholder="Place, Country or Region Search" />
+    <div id="map"></div>
+</body>
+</html>
