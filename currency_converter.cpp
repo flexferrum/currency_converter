@@ -7,12 +7,13 @@
 // the form. By default, the base currency is USD and the resulting currency is the currency used at the place that the info window is 
 // opened on.
 
-// Google's Geocoder and Reverse Geocoding Service returns status "ZERO_RESULTS" for Western Sahara, Wake Island, and Kosovo. Both dropdown
-// menus switch to AED in that situation. The status means that there are no results to show even though reverse geocodng did work.
+// Google's Geocoder and Reverse Geocoding Service returns status "ZERO_RESULTS" for Western Sahara, Wake Island, and Kosovo. The second
+// dropdown menu switches to AED in that situation. The status means that there are no results to show even though reverse geocodng did work.
 
-// This C++ application is the web server for the application. It acts as both a servera and a client, as it also has to query the currency API,
+// This C++ application is the web server for the application. It acts as both a server and a client, as it also has to query the currency API,
 // currencylayer.com, on its currency conversion endpoint and get the conversion result to return to the front-end code.  It also holds two
 // environment variables, one to hold the Google Maps API Key and the other to hold the currencylayer.com API access key.  
+
 #include <boost/beast/core.hpp>
 #include <boost/beast/http.hpp>
 #include <boost/beast/version.hpp>
@@ -22,13 +23,14 @@
 #include <map>
 #include <cctype>
 #include <iostream>
+#include <vector>
 #include <memory>
 #include <string>
 #include <thread>
 #include <nlohmann/json.hpp>
 #include <jinja2cpp/template.h>
 #include <jinja2cpp/value.h>
-#include <jinja2cpp/template_env.h.h>
+#include <jinja2cpp/template_env.h>
 
 using tcp = boost::asio::ip::tcp;       // from <boost/asio/ip/tcp.hpp>
 using nlohmann::json;					// from <nlohmann/json.hpp>
@@ -52,7 +54,7 @@ public:
 	// This function queries the currency API after making sure
 	// that the stored result(s) is/are old enough
 	// It also makes a new query to the API if needed
-	const json &query(const std::map<std::string, std::string> &query_data, const char *accesskey);
+	const json &query(const std::map<std::string, std::string> &query_data, const char *accesskey, const json &sentry);
 
 private:
 	std::map<const std::map<std::string, std::string>, std::pair<std::chrono::time_point<std::chrono::steady_clock>, json>> m_cache;
@@ -91,8 +93,7 @@ struct send_lambda
 	bool &close_;
 	boost::system::error_code &ec_;
 
-	explicit
-		send_lambda(Stream &stream, bool &close, boost::system::error_code &ec)
+	explicit send_lambda(Stream &stream, bool &close, boost::system::error_code &ec)
 		: stream_{ stream }, close_{ close }, ec_{ ec }
 	{
 	}
@@ -106,6 +107,10 @@ void do_session(tcp::socket socket, const std::string &doc_root, const char *acc
 
 //------------------------------------------------------------------------------
 
+// alternate implementation of `std::map::insert_or_assign` for C++14
+template<typename M, typename K, typename V>
+auto insert_or_assign(M&& map, K&& key, V&& value);
+
 int main(int argc, char* argv[])
 {
 	try
@@ -116,7 +121,7 @@ int main(int argc, char* argv[])
 			std::cerr <<
 				"Usage: currency_converter <address> <port> <doc_root>\n" <<
 				"Example:\n" <<
-				"    currency_converter 0.0.0.0 8080 .\n";
+				"    ./currency_converter 0.0.0.0 8080 .";
 			return EXIT_FAILURE;
 		}
 		const auto address = boost::asio::ip::make_address(argv[1]);
@@ -151,12 +156,12 @@ int main(int argc, char* argv[])
 	}
 	catch (const std::runtime_error &e)
 	{
-		std::cerr << "Line 154: Error: " << e.what() << '\n';
+		std::cerr << "Line 159: Error: " << e.what() << '\n';
 		return EXIT_FAILURE;
 	}
 	catch (const std::exception &e)
 	{
-		std::cerr << "Line 159: Error: " << e.what() << '\n';
+		std::cerr << "Line 164: Error: " << e.what() << '\n';
 		return EXIT_FAILURE + 1;
 	}
 }
@@ -315,7 +320,7 @@ std::map<std::string, std::string> parse(const std::string &data)
 	std::string value;
 
 	States state = States::Start;
-	for (char c : data)
+	for (const char c : data)
 	{
 		switch (state)
 		{
@@ -520,9 +525,8 @@ void handle_request(boost::beast::string_view doc_root, http::request<Body, http
 		std::map<std::string, std::string> parsed_value = parse(req.body());
 		double money_amount = std::stod(parsed_value["currency_amount"]);
 		std::string to_currency = parsed_value["to_currency"];
-		std::string from_currency = parsed_value["from_currency"];
+		std::string from_abbr = "USD";
 		std::string to_abbr = to_currency.substr(0, 3);
-		std::string from_abbr = from_currency.substr(0, 3);
 		double conversion_result = convert(from_abbr, to_abbr, money_amount, accesskey);
 
 		http::response<http::string_body> res{
@@ -580,7 +584,7 @@ void do_session(tcp::socket socket, const std::string &doc_root, const char *acc
 		}
 		if (ec)
 		{
-			std::cerr << "Lines 583 and 584:\n";
+			std::cerr << "Lines 587 and 588:\n";
 			return fail(ec, "read");
 		}
 
@@ -588,7 +592,7 @@ void do_session(tcp::socket socket, const std::string &doc_root, const char *acc
 		handle_request(doc_root, std::move(req), lambda, accesskey, apikey);
 		if (ec)
 		{
-			std::cerr << "Lines 591 and 592:\n";
+			std::cerr << "Lines 595 and 596:\n";
 			return fail(ec, "write");
 		}
 		if (close)
@@ -622,7 +626,8 @@ double convert(const std::string &from_currency, std::string &to_currency, const
 	std::map<std::string, std::string> query_data{ std::make_pair("from_currency", from_currency), std::make_pair("to_currency", to_currency) };
 
 	cache_storage cache{ 1h };
-	json j_res = cache.query(query_data, accesskey);
+	const json sentry{ nullptr };
+	json j_res = cache.query(query_data, accesskey, sentry);
 
 	double result = 0, rate = 0;
 
@@ -632,7 +637,7 @@ double convert(const std::string &from_currency, std::string &to_currency, const
 	}
 	catch (const json::exception &e)
 	{
-		std::cerr << "Line 635: Error: " << e.what() << '\n';
+		std::cerr << "Line 640: Error: " << e.what() << '\n';
 	}
 
 	if (std::find(currencies.begin(), currencies.end(), to_currency) != currencies.end() &&
@@ -647,7 +652,7 @@ double convert(const std::string &from_currency, std::string &to_currency, const
 // This function queries the currency API after making sure
 // that the stored result(s) is/are old enough
 // It also makes a new query to the API if needed
-const json &cache_storage::query(const std::map<std::string, std::string> &query_data, const char *accesskey)
+const json &cache_storage::query(const std::map<std::string, std::string> &query_data, const char *accesskey, const json &sentry)
 {
 	auto found = m_cache.find(query_data);
 	boost::beast::error_code ec;
@@ -706,11 +711,11 @@ const json &cache_storage::query(const std::map<std::string, std::string> &query
 	}
 	catch (const std::exception &e)
 	{
-		std::cerr << "Line 709: Error: " << e.what() << '\n';
+		std::cerr << "Line 714: Error: " << e.what() << '\n';
 	}
 	catch (const boost::beast::error_code &ec)
 	{
-		std::cerr << "Line 713: Error: " << ec.message() << '\n';
+		std::cerr << "Line 718: Error: " << ec.message() << '\n';
 	}
-	return json{ nullptr };
+	return sentry;
 }
